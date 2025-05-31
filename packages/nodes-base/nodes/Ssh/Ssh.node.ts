@@ -285,25 +285,30 @@ export class Ssh implements INodeType {
 				const credentials = credential.data as IDataObject;
 				const ssh = new NodeSSH();
 				try {
-					if (!credentials.privateKey) {
-						await ssh.connect({
-							host: credentials.host as string,
-							username: credentials.username as string,
-							port: credentials.port as number,
-							password: credentials.password as string,
-						});
-					} else {
-						const options: Config = {
-							host: credentials.host as string,
-							username: credentials.username as string,
-							port: credentials.port as number,
-							privateKey: formatPrivateKey(credentials.privateKey as string),
-						};
+					const { host, username, port, password, privateKey, passphrase, jumpHost } = credentials;
+					const options: Config = {
+						host: host as string,
+						username: username as string,
+						port: port as number,
+					};
 
-						if (credentials.passphrase) {
-							options.passphrase = credentials.passphrase as string;
+					if (jumpHost) {
+						let proxyUsername = username as string;
+						let proxyHost = jumpHost as string;
+						if (jumpHost.includes('@')) {
+							[proxyUsername, proxyHost] = (jumpHost as string).split('@');
 						}
+						options.proxyCommand = `ssh -W %h:%p ${proxyUsername}@${proxyHost}`;
+					}
 
+					if (!privateKey) {
+						options.password = password as string;
+						await ssh.connect(options);
+					} else {
+						options.privateKey = formatPrivateKey(privateKey as string);
+						if (passphrase) {
+							options.passphrase = passphrase as string;
+						}
 						await ssh.connect(options);
 					}
 				} catch (error) {
@@ -335,30 +340,48 @@ export class Ssh implements INodeType {
 		const ssh = new NodeSSH();
 
 		try {
+			let credentialsConfig: Config;
+			let jumpHost: string | undefined;
+			let username: string;
+
 			if (authentication === 'password') {
 				const credentials = await this.getCredentials('sshPassword');
-
-				await ssh.connect({
+				username = credentials.username as string;
+				jumpHost = credentials.jumpHost as string;
+				credentialsConfig = {
 					host: credentials.host as string,
-					username: credentials.username as string,
+					username: username,
 					port: credentials.port as number,
 					password: credentials.password as string,
-				});
+				};
 			} else if (authentication === 'privateKey') {
 				const credentials = await this.getCredentials('sshPrivateKey');
-				const options: Config = {
+				username = credentials.username as string;
+				jumpHost = credentials.jumpHost as string;
+				credentialsConfig = {
 					host: credentials.host as string,
-					username: credentials.username as string,
+					username: username,
 					port: credentials.port as number,
 					privateKey: formatPrivateKey(credentials.privateKey as string),
 				};
 
 				if (credentials.passphrase) {
-					options.passphrase = credentials.passphrase as string;
+					credentialsConfig.passphrase = credentials.passphrase as string;
 				}
-
-				await ssh.connect(options);
+			} else {
+				throw new NodeOperationError(this.getNode(), 'Invalid authentication method selected.');
 			}
+
+			if (jumpHost) {
+				let proxyUsername = username;
+				let proxyHost = jumpHost;
+				if (jumpHost.includes('@')) {
+					[proxyUsername, proxyHost] = jumpHost.split('@');
+				}
+				credentialsConfig.proxyCommand = `ssh -W %h:%p ${proxyUsername}@${proxyHost}`;
+			}
+
+			await ssh.connect(credentialsConfig);
 
 			for (let i = 0; i < items.length; i++) {
 				try {

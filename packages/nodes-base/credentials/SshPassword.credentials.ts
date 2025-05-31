@@ -29,6 +29,14 @@ export class SshPassword implements ICredentialType {
 			type: 'string',
 			default: '',
 		},
+	{
+		displayName: 'Jump Host',
+		name: 'jumpHost',
+		type: 'string',
+		default: '',
+		placeholder: 'user@jump-server.com',
+		description: 'Optional. The jump host to use for the SSH connection. Format: user@host or host (uses the same username as the target server).',
+	},
 		{
 			displayName: 'Password',
 			name: 'password',
