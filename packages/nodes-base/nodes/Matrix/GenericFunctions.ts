@@ -8,6 +8,55 @@ import type {
 } from 'n8n-workflow';
 import { NodeApiError, NodeOperationError } from 'n8n-workflow';
 import { v4 as uuid } from 'uuid';
+import { MatrixClientWrapper } from './MatrixClient';
+
+// Store active client instances per execution
+const clientInstances = new Map<string, MatrixClientWrapper>();
+
+/**
+ * Get or create a Matrix client wrapper for encryption support
+ */
+async function getMatrixClient(
+	context: IExecuteFunctions | ILoadOptionsFunctions,
+): Promise<MatrixClientWrapper | null> {
+	const credentials = await context.getCredentials('matrixApi');
+
+	// Check if encryption is enabled
+	if (!credentials.enableEncryption) {
+		return null;
+	}
+
+	// Create a unique key for this execution context
+	const executionId = 'executionId' in context ? (context as any).executionId : 'default';
+	const clientKey = `${executionId}-${credentials.userId || credentials.accessToken}`;
+
+	// Return existing client if available
+	if (clientInstances.has(clientKey)) {
+		return clientInstances.get(clientKey)!;
+	}
+
+	// Create new client
+	const client = new MatrixClientWrapper();
+	await client.initialize({
+		accessToken: credentials.accessToken as string,
+		homeserverUrl: credentials.homeserverUrl as string,
+		userId: credentials.userId as string | undefined,
+		deviceId: credentials.deviceId as string | undefined,
+	});
+
+	clientInstances.set(clientKey, client);
+
+	// Schedule cleanup after execution (10 minutes)
+	setTimeout(async () => {
+		const instance = clientInstances.get(clientKey);
+		if (instance) {
+			await instance.stop();
+			clientInstances.delete(clientKey);
+		}
+	}, 600000);
+
+	return client;
+}
 
 export async function matrixApiRequest(
 	this: IExecuteFunctions | ILoadOptionsFunctions,
@@ -100,6 +149,9 @@ export async function handleMatrixCall(
 			return await matrixApiRequest.call(this, 'POST', `/rooms/${roomId}/kick`, body);
 		}
 	} else if (resource === 'message') {
+		// Try to use SDK client for encryption support
+		const matrixClient = await getMatrixClient.call(this);
+
 		if (operation === 'create') {
 			const roomId = this.getNodeParameter('roomId', index) as string;
 			const text = this.getNodeParameter('text', index, '') as string;
@@ -115,6 +167,21 @@ export async function handleMatrixCall(
 				body.formatted_body = text;
 				body.body = fallbackText;
 			}
+
+			// Use SDK client if available for automatic encryption
+			if (matrixClient) {
+				try {
+					return await matrixClient.sendMessage(roomId, body);
+				} catch (error) {
+					// Fall back to HTTP API if SDK fails
+					throw new NodeOperationError(
+						this.getNode(),
+						`Failed to send message via SDK: ${(error as Error).message}`,
+					);
+				}
+			}
+
+			// Fallback to HTTP API
 			const messageId = uuid();
 			return await matrixApiRequest.call(
 				this,
@@ -126,6 +193,45 @@ export async function handleMatrixCall(
 			const roomId = this.getNodeParameter('roomId', index) as string;
 			const returnAll = this.getNodeParameter('returnAll', index);
 			const otherOptions = this.getNodeParameter('otherOptions', index) as IDataObject;
+
+			// Use SDK client if available for automatic decryption
+			if (matrixClient) {
+				try {
+					if (returnAll) {
+						// Get all messages
+						const allMessages: IDataObject[] = [];
+						let from: string | undefined;
+						let hasMore = true;
+
+						while (hasMore) {
+							const messages = await matrixClient.getRoomMessages(roomId, 100, from);
+							if (messages.length === 0) {
+								hasMore = false;
+							} else {
+								allMessages.push(...messages);
+								// Get the 'end' token from the last message for pagination
+								const lastMsg = messages[messages.length - 1];
+								from = lastMsg.end as string | undefined;
+								if (!from) {
+									hasMore = false;
+								}
+							}
+						}
+						return allMessages;
+					} else {
+						const limit = this.getNodeParameter('limit', index) as number;
+						return await matrixClient.getRoomMessages(roomId, limit);
+					}
+				} catch (error) {
+					// Fall back to HTTP API if SDK fails
+					throw new NodeOperationError(
+						this.getNode(),
+						`Failed to get messages via SDK: ${(error as Error).message}`,
+					);
+				}
+			}
+
+			// Fallback to HTTP API (no decryption)
 			const returnData: IDataObject[] = [];
 
 			if (returnAll) {
@@ -175,9 +281,27 @@ export async function handleMatrixCall(
 			return returnData;
 		}
 	} else if (resource === 'event') {
+		// Try to use SDK client for encryption support
+		const matrixClient = await getMatrixClient.call(this);
+
 		if (operation === 'get') {
 			const roomId = this.getNodeParameter('roomId', index) as string;
 			const eventId = this.getNodeParameter('eventId', index) as string;
+
+			// Use SDK client if available for automatic decryption
+			if (matrixClient) {
+				try {
+					return await matrixClient.getEvent(roomId, eventId);
+				} catch (error) {
+					// Fall back to HTTP API if SDK fails
+					throw new NodeOperationError(
+						this.getNode(),
+						`Failed to get event via SDK: ${(error as Error).message}`,
+					);
+				}
+			}
+
+			// Fallback to HTTP API (no decryption)
 			return await matrixApiRequest.call(this, 'GET', `/rooms/${roomId}/event/${eventId}`);
 		}
 	} else if (resource === 'media') {
