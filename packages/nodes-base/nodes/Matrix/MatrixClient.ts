@@ -124,14 +124,29 @@ export class MatrixClientWrapper {
 		}
 
 		try {
-			// Use the scrollback method to get messages
-			const response = await this.client.scrollback(roomId, limit, from);
+			// Use the low-level HTTP API through the client to get messages
+			// This is more reliable than using higher-level methods that might not be consistent across versions
+			const queryParams: any = {
+				dir: 'b',
+				limit,
+			};
+			
+			if (from) {
+				queryParams.from = from;
+			}
+
+			// @ts-ignore - Using internal HTTP client for reliability
+			const response = await this.client.http.authedRequest(
+				undefined,
+				'GET',
+				`/rooms/${encodeURIComponent(roomId)}/messages`,
+				queryParams,
+			);
 
 			// Process and decrypt messages if needed
 			const messages: IDataObject[] = [];
 			
-			// The response structure depends on the SDK version
-			const events = Array.isArray(response) ? response : (response?.chunk || []);
+			const events = response?.chunk || [];
 			
 			for (const event of events) {
 				// Create a MatrixEvent from the event data
@@ -140,8 +155,9 @@ export class MatrixClientWrapper {
 				// Check if event is encrypted and try to decrypt
 				if (matrixEvent.isEncrypted()) {
 					try {
-						if (this.client.decryptEventIfNeeded && typeof this.client.decryptEventIfNeeded === 'function') {
-							await this.client.decryptEventIfNeeded(matrixEvent);
+						// Try to decrypt using the crypto module
+						if (this.client.crypto && typeof (this.client.crypto as any).decryptEvent === 'function') {
+							await (this.client.crypto as any).decryptEvent(matrixEvent);
 						}
 					} catch (decryptError) {
 						// If decryption fails, include the encrypted event with an error marker
@@ -185,8 +201,14 @@ export class MatrixClientWrapper {
 				console.warn(`Room ${roomId} not found in cache, attempting to send message anyway`);
 			}
 
-			// Send message - SDK will automatically encrypt if the room requires it
-			const response = await this.client.sendMessage(roomId, content);
+			// Send message using sendEvent - SDK will automatically encrypt if the room requires it
+			// Use m.room.message event type
+			const response = await this.client.sendEvent(
+				roomId,
+				'm.room.message' as any,
+				content,
+			);
+			
 			return response as unknown as IDataObject;
 		} catch (error) {
 			throw new OperationalError(`Failed to send message: ${(error as Error).message}`);
@@ -202,14 +224,22 @@ export class MatrixClientWrapper {
 		}
 
 		try {
-			const event = await this.client.fetchRoomEvent(roomId, eventId);
+			// Use the low-level HTTP API through the client
+			// @ts-ignore - Using internal HTTP client for reliability
+			const event = await this.client.http.authedRequest(
+				undefined,
+				'GET',
+				`/rooms/${encodeURIComponent(roomId)}/event/${encodeURIComponent(eventId)}`,
+			);
+
 			const matrixEvent = new sdk.MatrixEvent(event as any);
 
 			// Check if event is encrypted and try to decrypt
 			if (matrixEvent.isEncrypted()) {
 				try {
-					if (this.client.decryptEventIfNeeded && typeof this.client.decryptEventIfNeeded === 'function') {
-						await this.client.decryptEventIfNeeded(matrixEvent);
+					// Try to decrypt using the crypto module
+					if (this.client.crypto && typeof (this.client.crypto as any).decryptEvent === 'function') {
+						await (this.client.crypto as any).decryptEvent(matrixEvent);
 					}
 				} catch (decryptError) {
 					return {
