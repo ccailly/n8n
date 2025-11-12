@@ -17,7 +17,9 @@ interface MatrixCredentials {
 }
 
 /**
- * Wrapper class for matrix-js-sdk that handles encryption and client lifecycle
+ * Wrapper class for matrix-js-sdk that handles encryption and client lifecycle.
+ * Provides transparent encryption/decryption for Matrix rooms with E2EE enabled.
+ */
  */
 export class MatrixClientWrapper {
 	private client: SDKMatrixClient | null = null;
