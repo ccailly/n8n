@@ -204,14 +204,13 @@ export async function handleMatrixCall(
 						let hasMore = true;
 
 						while (hasMore) {
-							const messages = await matrixClient.getRoomMessages(roomId, 100, from);
-							if (messages.length === 0) {
+							const response = await matrixClient.getRoomMessages(roomId, 100, from);
+							if (response.messages.length === 0) {
 								hasMore = false;
 							} else {
-								allMessages.push(...messages);
-								// Get the 'end' token from the last message for pagination
-								const lastMsg = messages[messages.length - 1];
-								from = lastMsg.end as string | undefined;
+								allMessages.push(...response.messages);
+								// Get the 'end' token for pagination
+								from = response.end;
 								if (!from) {
 									hasMore = false;
 								}
@@ -220,7 +219,8 @@ export async function handleMatrixCall(
 						return allMessages;
 					} else {
 						const limit = this.getNodeParameter('limit', index) as number;
-						return await matrixClient.getRoomMessages(roomId, limit);
+						const response = await matrixClient.getRoomMessages(roomId, limit);
+						return response.messages;
 					}
 				} catch (error) {
 					// Fall back to HTTP API if SDK fails

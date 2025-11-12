@@ -118,7 +118,7 @@ export class MatrixClientWrapper {
 		roomId: string,
 		limit: number = 100,
 		from?: string,
-	): Promise<IDataObject[]> {
+	): Promise<{ messages: IDataObject[]; end?: string; start?: string }> {
 		if (!this.client) {
 			throw new OperationalError('Matrix client not initialized');
 		}
@@ -177,7 +177,11 @@ export class MatrixClientWrapper {
 				});
 			}
 
-			return messages;
+			return {
+				messages,
+				end: response?.end,
+				start: response?.start,
+			};
 		} catch (error) {
 			throw new OperationalError(
 				`Failed to get room messages: ${(error as Error).message}`,
