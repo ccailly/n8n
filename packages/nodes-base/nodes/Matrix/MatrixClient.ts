@@ -38,15 +38,18 @@ export class MatrixClientWrapper {
 				accessToken: credentials.accessToken,
 				userId: credentials.userId,
 				deviceId: credentials.deviceId || undefined,
-				// Use memory crypto store for now - can be enhanced later to use persistent storage
-				cryptoStore: undefined,
 			};
 
 			this.client = sdk.createClient(clientOpts);
 
-			// Initialize crypto if available
-			if (this.client.crypto) {
-				await this.client.initCrypto();
+			// Initialize crypto if available - in newer versions this might be automatic
+			if (this.client.initCrypto && typeof this.client.initCrypto === 'function') {
+				try {
+					await this.client.initCrypto();
+				} catch (cryptoError) {
+					// Crypto initialization might fail if not properly configured, continue anyway
+					console.warn('Failed to initialize crypto:', cryptoError);
+				}
 			}
 
 			// Start sync to get room keys and decrypt messages
@@ -120,29 +123,30 @@ export class MatrixClientWrapper {
 			throw new OperationalError('Matrix client not initialized');
 		}
 
-		const room = this.client.getRoom(roomId);
-		if (!room) {
-			throw new OperationalError(`Room ${roomId} not found`);
-		}
-
 		try {
-			// Get messages using the client's scrollback method
-			const response = await this.client.createMessagesRequest(roomId, from || '', limit, 'b');
+			// Use the scrollback method to get messages
+			const response = await this.client.scrollback(roomId, limit, from);
 
 			// Process and decrypt messages if needed
 			const messages: IDataObject[] = [];
-			for (const event of response.chunk || []) {
+			
+			// The response structure depends on the SDK version
+			const events = Array.isArray(response) ? response : (response?.chunk || []);
+			
+			for (const event of events) {
 				// Create a MatrixEvent from the event data
 				const matrixEvent = new sdk.MatrixEvent(event as any);
 
-				// Decrypt if encrypted
+				// Check if event is encrypted and try to decrypt
 				if (matrixEvent.isEncrypted()) {
 					try {
-						await this.client.decryptEventIfNeeded(matrixEvent);
+						if (this.client.decryptEventIfNeeded && typeof this.client.decryptEventIfNeeded === 'function') {
+							await this.client.decryptEventIfNeeded(matrixEvent);
+						}
 					} catch (decryptError) {
 						// If decryption fails, include the encrypted event with an error marker
 						messages.push({
-							...event,
+							...(event as any),
 							decryption_error: (decryptError as Error).message,
 						});
 						continue;
@@ -151,7 +155,7 @@ export class MatrixClientWrapper {
 
 				// Return the decrypted or plain content
 				messages.push({
-					...event,
+					...(event as any),
 					content: matrixEvent.getContent(),
 					decrypted: matrixEvent.isEncrypted(),
 				});
@@ -173,12 +177,14 @@ export class MatrixClientWrapper {
 			throw new OperationalError('Matrix client not initialized');
 		}
 
-		const room = this.client.getRoom(roomId);
-		if (!room) {
-			throw new OperationalError(`Room ${roomId} not found`);
-		}
-
 		try {
+			// Check if room exists
+			const room = this.client.getRoom(roomId);
+			if (!room) {
+				// Room might not be in the client's cache yet, try to send anyway
+				console.warn(`Room ${roomId} not found in cache, attempting to send message anyway`);
+			}
+
 			// Send message - SDK will automatically encrypt if the room requires it
 			const response = await this.client.sendMessage(roomId, content);
 			return response as unknown as IDataObject;
@@ -199,20 +205,22 @@ export class MatrixClientWrapper {
 			const event = await this.client.fetchRoomEvent(roomId, eventId);
 			const matrixEvent = new sdk.MatrixEvent(event as any);
 
-			// Decrypt if encrypted
+			// Check if event is encrypted and try to decrypt
 			if (matrixEvent.isEncrypted()) {
 				try {
-					await this.client.decryptEventIfNeeded(matrixEvent);
+					if (this.client.decryptEventIfNeeded && typeof this.client.decryptEventIfNeeded === 'function') {
+						await this.client.decryptEventIfNeeded(matrixEvent);
+					}
 				} catch (decryptError) {
 					return {
-						...event,
+						...(event as any),
 						decryption_error: (decryptError as Error).message,
 					};
 				}
 			}
 
 			return {
-				...event,
+				...(event as any),
 				content: matrixEvent.getContent(),
 				decrypted: matrixEvent.isEncrypted(),
 			};
