@@ -20,7 +20,6 @@ interface MatrixCredentials {
  * Wrapper class for matrix-js-sdk that handles encryption and client lifecycle.
  * Provides transparent encryption/decryption for Matrix rooms with E2EE enabled.
  */
- */
 export class MatrixClientWrapper {
 	private client: SDKMatrixClient | null = null;
 	private isInitialized = false;
@@ -44,13 +43,16 @@ export class MatrixClientWrapper {
 
 			this.client = sdk.createClient(clientOpts);
 
-			// Initialize crypto if available - in newer versions this might be automatic
-			if (this.client.initCrypto && typeof this.client.initCrypto === 'function') {
+			// Initialize Rust crypto for E2EE support (modern matrix-js-sdk approach)
+			// Uses in-memory store since we're not in a browser environment
+			if (this.client.initRustCrypto && typeof this.client.initRustCrypto === 'function') {
 				try {
-					await this.client.initCrypto();
+					await this.client.initRustCrypto({
+						useIndexedDB: false, // Use in-memory store for Node.js environment
+					});
 				} catch (cryptoError) {
 					// Crypto initialization might fail if not properly configured, continue anyway
-					console.warn('Failed to initialize crypto:', cryptoError);
+					console.warn('Failed to initialize Rust crypto:', cryptoError);
 				}
 			}
 
@@ -157,9 +159,10 @@ export class MatrixClientWrapper {
 				// Check if event is encrypted and try to decrypt
 				if (matrixEvent.isEncrypted()) {
 					try {
-						// Try to decrypt using the crypto module
-						if (this.client.crypto && typeof (this.client.crypto as any).decryptEvent === 'function') {
-							await (this.client.crypto as any).decryptEvent(matrixEvent);
+						// Try to decrypt using the Rust crypto module via getCrypto()
+						const crypto = this.client.getCrypto && this.client.getCrypto();
+						if (crypto && typeof (crypto as any).decryptEvent === 'function') {
+							await (crypto as any).decryptEvent(matrixEvent);
 						}
 					} catch (decryptError) {
 						// If decryption fails, include the encrypted event with an error marker
@@ -243,9 +246,10 @@ export class MatrixClientWrapper {
 			// Check if event is encrypted and try to decrypt
 			if (matrixEvent.isEncrypted()) {
 				try {
-					// Try to decrypt using the crypto module
-					if (this.client.crypto && typeof (this.client.crypto as any).decryptEvent === 'function') {
-						await (this.client.crypto as any).decryptEvent(matrixEvent);
+					// Try to decrypt using the Rust crypto module via getCrypto()
+					const crypto = this.client.getCrypto && this.client.getCrypto();
+					if (crypto && typeof (crypto as any).decryptEvent === 'function') {
+						await (crypto as any).decryptEvent(matrixEvent);
 					}
 				} catch (decryptError) {
 					return {
@@ -286,6 +290,6 @@ export class MatrixClientWrapper {
 	 * Check if encryption is supported/enabled
 	 */
 	isEncryptionEnabled(): boolean {
-		return this.client?.crypto !== undefined;
+		return this.client?.getCrypto !== undefined && this.client.getCrypto() !== undefined;
 	}
 }
